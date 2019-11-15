@@ -1,0 +1,160 @@
+---
+author:
+  name: Nikita Korobkov
+  email: nikkorobk@gmail.com
+title: "Crypto Asset Growth Metric"
+date: 11/15/2019
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library (RCurl)
+library(ggplot2)
+library(scales)
+library(plotly)
+```
+
+## Problem
+
+The objective of this work is to propose a single metric, that would represent how fast a cryptocurrency network is growing.  
+The ideal aggregate growth metric would be comparable across time (allow a user to measure growth today versus some time in the past) and across crypto assets (allow a user to compare the growth of Bitcoin versus Ethereum).  
+A more detailed description of the problem can be found in [this document](case-study.pdf).  
+Original RMarkdown notebook can be found [here](CryptoAssetGrowth.Rmd)
+
+## Metric Description
+
+### Idea
+
+Growth by itself is just a value of change over time. So to calculate the growth of something we should first define that something.  
+
+>  $growth(X) = X(t) - X(t-1) ~= X'(t)$
+
+We want to represent the growth of **size** or **activity** of the network. 
+Let's define **size** of the network at a particular time as *number of individuals using the cryptocurrency* times *size of single user interaction with network*
+
+
+> **Size** = **#users** x **size of single usage**
+
+The size of the net should be large if a lot of people spend significant amount of cryptocurrency regularly. And should be smaller if either fewer people use the asset or the same amount of people use the net only minorly.  
+However, we can notice that the number of people using cryptocurrency even for really small money transfers is a much more significant factor of the net size in general. We will use this observation further. 
+
+### Numbers
+To estimate the size of the net how we defined it based on the data we have we need to make some compromises.  
+
+1. Network data is very unstable during the week. To lower the effect of weekly oscillations we will measure the size of the network for the whole week, rather than for a single day. 
+
+2. Data about single individuals using the network is not accessible by design. For the purpose of this experiment, we would approximate it with a number of unique active addresses in the net during the period. Unfortunately, we only have data per day, so let's say that the number of individuals using the network during some period is proportional to the third quartile of unique addresses count for each day during that period. 
+
+3. To estimate the size of single user interaction with network let's multiply the mean value of a single transfer in USD by the expected number of transfers per user (total number of transfers / estimated number of users)
+
+4. Since the number of users has bigger significance to the resulting size of the network we will take a log of a single-user interaction size befor multipluing. 
+
+With all that said, final size metrtic would look like this: 
+
+> $size(t) =  Q_3(AdrActCnt) * log_{10}[\frac{\overline{TxTfr}  * \overline{TxTfrValMeanUSD}}{Q_3(AdrActCnt)}]$
+
+## Graphs
+
+```{r metric, include=FALSE, cache=TRUE}
+download <- getURL("https://community-api.coinmetrics.io/v2/assets/btc/metricdata.csv?metrics=AdrActCnt,TxTfrValMeanUSD,TxTfrCnt&start=2010-01-01")
+data <- read.csv (text = download)
+data$time <- as.Date(as.character(data$time))
+
+data$week = strftime(data$time,'%G')
+data$year = strftime(data$time,'%Y')
+data$year_week = strftime(data$time,'%G %V')
+data$year_month = strftime(data$time,'%Y %m')
+
+dataframe = data_frame(data)
+quantile(dataframe$data$AdrActCnt)[4]
+
+data_by_week = group_by(data, year_week) %>% summarise(
+  time = first(time),
+  q3_adress_count = quantile(AdrActCnt)[4],
+  mean_transfer_val_USD = mean(TxTfrValMeanUSD),
+  mean_transfer_count = mean(TxTfrCnt)) %>% mutate(
+    log_mean_usage = log(mean_transfer_val_USD * mean_transfer_count / q3_adress_count),
+    metric = log_mean_usage * q3_adress_count,
+    prev_week_metric = lag(metric),
+    metric_growth = metric-prev_week_metric,
+    metric_growth_percent = 100*metric_growth/prev_week_metric)
+
+data_by_month = group_by(data, year_month) %>% summarise(
+  time = first(time),
+  q3_adress_count = quantile(AdrActCnt)[4],
+  mean_transfer_val_USD = mean(TxTfrValMeanUSD),
+  mean_transfer_count = mean(TxTfrCnt)) %>% mutate(
+    log_mean_usage = log(mean_transfer_val_USD * mean_transfer_count / q3_adress_count),
+    metric = log_mean_usage * q3_adress_count,
+    prev_month_metric = lag(metric),
+    metric_growth = metric-prev_month_metric,
+    metric_growth_percent = 100*metric_growth/prev_month_metric)
+```
+
+Here are some graphs showing the growth of the network over time. 
+
+```{r plot19, echo=FALSE}
+filter= data_by_week$time>=as.Date('2019-01-01')
+
+ggplot(data_by_week[filter,],aes(time, metric_growth_percent)) +
+  geom_bar(stat = 'identity',fill='#4582EC') + 
+  scale_x_date(labels = date_format("%b"),
+               breaks = date_breaks(width = "1 month")) +
+  scale_y_continuous(breaks = seq(-30, 30, by=5)) + 
+  labs(title='Growth of BTC network by week in 2019', x='Week', y='Growth%')
+```
+
+```{r plot1718, echo=FALSE}
+filter=data_by_month$time>as.Date('2017-01-01') & data_by_month$time<as.Date('2019-01-01')
+
+ggplot(data_by_month[filter,],aes(time, metric_growth_percent)) +
+  geom_bar(stat = 'identity',fill='#4582EC') + 
+  scale_x_date(labels = date_format("%b'%g"),
+               breaks = date_breaks(width = "2 month")) +
+  scale_y_continuous(breaks = seq(-30, 30, by=5)) + 
+  labs(title='Growth of BTC network by month in 2017-2018', x='Month', y='Growth%')
+```
+
+
+Due to the really quick growth of Bitcoin at the very beginning of its existence growth is shown on a logarithmic scale on the next graph. 
+
+```{r plot all, echo=FALSE, warning=FALSE}
+
+my_log_trans <- function(){
+  trans_new(name = 'my_log', transform = function(x) sign(x) * log(abs(x)), 
+            inverse = function(x) sign(x) * exp(abs(x)))}
+
+ggplot(data_by_month,aes(time, metric_growth_percent)) +
+  geom_line() +
+  geom_point() + 
+  scale_y_continuous(trans = 'my_log',breaks=c(-100,-50,-10,-1,0,1,10,50,100))+
+  scale_x_date(labels = date_format("%Y"),
+               breaks = date_breaks(width = "12 month")) +
+  geom_hline(yintercept=0, color='#FFF', size = 2) +
+  labs(title='Growth of BTC network by month', x='Month', y='Growth%')
+```
+
+
+
+```{r plotly, echo=FALSE, warning=FALSE}
+p <- plot_ly(data_by_week, x = ~time, y = ~metric_growth_percent/100,type = 'scatter', mode = 'lines') %>%
+  layout(xaxis=list(title='Date'),
+         yaxis=list(title='Growth%',tickformat = "%"),
+         title='Interactive graph with weekly growth metric')
+
+p
+
+```
+
+## Remaining Problems
+
+1. The third quartile of a number of active addresses is a bad estimator for the number of individuals using the network. To fix this we can use data about the number of unique addresses throughout the whole period we are calculating the metric for. It should increase stability. 
+
+2. There should be a better way to fix weekly inconsistencies than just averaging over the week. Also, current implementation averages over a month, and can contain a different number of weekend days in a single month, and that should have a negative impact on data quality.
