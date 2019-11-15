@@ -52,18 +52,21 @@ To estimate the size of the net how we defined it based on the data we have we n
 
 2. Data about single individuals using the network is not accessible by design. For the purpose of this experiment, we would approximate it with a number of unique active addresses in the net during the period. Unfortunately, we only have data per day, so let's say that the number of individuals using the network during some period is proportional to the third quartile of unique addresses count for each day during that period. 
 
-3. To estimate the size of single user interaction with network let's multiply the mean value of a single transfer in USD by the expected number of transfers per user (total number of transfers / estimated number of users)
+3. To estimate the size of single user interaction with network let's multiply the  value of a single transfer in USD by the expected number of transfers per user (total number of transfers / estimated number of users) and take mean over period.
 
 4. Since the number of users has bigger significance to the resulting size of the network we will take a log of a single-user interaction size befor multipluing. 
 
 With all that said, final size metrtic would look like this: 
 
-> $size(t) =  Q_3(AdrActCnt) * log_{10}[\frac{\overline{TxTfr}  * \overline{TxTfrValMeanUSD}}{Q_3(AdrActCnt)}]$
+> $size(t) =  Q_3(AdrActCnt) * log_{10}[\frac{\overline{TxTfr *TxTfrValMeanUSD}}{Q_3(AdrActCnt)}]$
+
+We can note, that $\overline{TxTfr * TxTfrValMeanUSD}$ should be equal to $\overline{TxTfrValUSD}$. We will use adjusted value of total transfers $\overline{TxTfrValAdjUSD}$ instead to reduce noise.
+
 
 ## Graphs
 
 ```{r metric, include=FALSE, cache=TRUE}
-download <- getURL("https://community-api.coinmetrics.io/v2/assets/btc/metricdata.csv?metrics=AdrActCnt,TxTfrValMeanUSD,TxTfrCnt&start=2010-01-01")
+download <- getURL("https://community-api.coinmetrics.io/v2/assets/btc/metricdata.csv?metrics=AdrActCnt,TxTfrValMeanUSD,TxTfrCnt,TxTfrValAdjUSD&start=2010-01-01")
 data <- read.csv (text = download)
 data$time <- as.Date(as.character(data$time))
 
@@ -78,9 +81,8 @@ quantile(dataframe$data$AdrActCnt)[4]
 data_by_week = group_by(data, year_week) %>% summarise(
   time = first(time),
   q3_adress_count = quantile(AdrActCnt)[4],
-  mean_transfer_val_USD = mean(TxTfrValMeanUSD),
-  mean_transfer_count = mean(TxTfrCnt)) %>% mutate(
-    log_mean_usage = log(mean_transfer_val_USD * mean_transfer_count / q3_adress_count),
+  mean_total_transfer_val_USD = mean(TxTfrValAdjUSD)) %>% mutate(
+    log_mean_usage = log(mean_total_transfer_val_USD / q3_adress_count),
     metric = log_mean_usage * q3_adress_count,
     prev_week_metric = lag(metric),
     metric_growth = metric-prev_week_metric,
@@ -89,9 +91,8 @@ data_by_week = group_by(data, year_week) %>% summarise(
 data_by_month = group_by(data, year_month) %>% summarise(
   time = first(time),
   q3_adress_count = quantile(AdrActCnt)[4],
-  mean_transfer_val_USD = mean(TxTfrValMeanUSD),
-  mean_transfer_count = mean(TxTfrCnt)) %>% mutate(
-    log_mean_usage = log(mean_transfer_val_USD * mean_transfer_count / q3_adress_count),
+  mean_total_transfer_val_USD = mean(TxTfrValAdjUSD)) %>% mutate(
+    log_mean_usage = log(mean_total_transfer_val_USD  / q3_adress_count),
     metric = log_mean_usage * q3_adress_count,
     prev_month_metric = lag(metric),
     metric_growth = metric-prev_month_metric,
